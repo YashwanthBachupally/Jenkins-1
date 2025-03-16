@@ -5,6 +5,12 @@ pipeline {
         REGISTRY = "ghcr.io"
         IMAGE_NAME = "${env.GITHUB_REPOSITORY}"
         GITHUB_TOKEN = credentials('github-token') // Assuming you have saved your GitHub token as a credential in Jenkins
+        REMOTE_HOST = "your-remote-host"
+        REMOTE_USER = "your-remote-user"
+        SSH_KEY = credentials('ssh-key-id') // SSH key credential ID in Jenkins
+        KOPS_CLUSTER_NAME = "your-kops-cluster-name"
+        KOPS_STATE_STORE = "s3://your-kops-state-store"
+        KUBECONFIG = credentials('kubeconfig') // Kubeconfig file credential ID in Jenkins
     }
 
     stages {
@@ -96,6 +102,48 @@ pipeline {
                         git commit -m "Update Kubernetes deployment with new image tag: ${IMAGE_TAG} [skip ci]" || echo "No changes to commit"
                         git push
                     '''
+                }
+            }
+        }
+
+        stage('Apply Kubernetes Manifests') {
+            when {
+                branch 'main'
+            }
+            agent {
+                label 'ubuntu'
+            }
+            steps {
+                script {
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
+                        sh '''
+                            export KUBECONFIG=${KUBECONFIG_FILE}
+                            kubectl apply -f kubernetes/deployment.yaml
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kops Cluster') {
+            when {
+                branch 'main'
+            }
+            agent {
+                label 'ubuntu'
+            }
+            steps {
+                script {
+                    withCredentials([sshUserPrivateKey(credentialsId: 'ssh-key-id', keyFileVariable: 'SSH_KEY')]) {
+                        sh '''
+                            ssh -i ${SSH_KEY} ${REMOTE_USER}@${REMOTE_HOST} << EOF
+                                export KOPS_CLUSTER_NAME=${KOPS_CLUSTER_NAME}
+                                export KOPS_STATE_STORE=${KOPS_STATE_STORE}
+                                kops update cluster --name ${KOPS_CLUSTER_NAME} --yes
+                                kops rolling-update cluster --name ${KOPS_CLUSTER_NAME} --yes
+                            EOF
+                        '''
+                    }
                 }
             }
         }
